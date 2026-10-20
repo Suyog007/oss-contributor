@@ -1,0 +1,872 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ---------------------------------------------------------------------------
+// Projects
+//
+// A project is a repository the discovery layer found on its own. Everything
+// the system knows about it is derived from GitHub data plus cached analysis
+// keyed by commit SHA, so unchanged repositories are never re-analyzed.
+// ---------------------------------------------------------------------------
+
+enum ProjectState {
+  /// Still being evaluated or actively worked on.
+  ACTIVE
+  /// Analysis stopped for now (recently rejected candidates, low signal).
+  COOLDOWN
+  /// Excluded by policy or by the operator.
+  IGNORED
+  /// Excluded for a hard reason (archived, no license, hostile contribution terms).
+  BLOCKED
+}
+
+enum DiscoverySource {
+  GITHUB_SEARCH
+  GITHUB_TRENDING
+  GITHUB_EVENT
+  MANUAL
+}
+
+model Project {
+  id String @id @default(cuid())
+
+  githubId      BigInt   @unique
+  fullName      String   @unique
+  owner         String
+  name          String
+  defaultBranch String
+  isFork        Boolean  @default(false)
+  archived      Boolean  @default(false)
+  license       String?
+  language      String?
+  topics        String[] @default([])
+  description   String?
+  /// GitHub's own size in KB. Used for budget/cost gating.
+  sizeKb        Int      @default(0)
+
+  stars      Int @default(0)
+  forks      Int @default(0)
+  watchers   Int @default(0)
+  openIssues Int @default(0)
+
+  /// GitHub timestamps. kept verbatim so growth rates can be recomputed.
+  repoCreatedAt DateTime @db.Timestamptz(3)
+  repoPushedAt  DateTime @db.Timestamptz(3)
+
+  state       ProjectState @default(ACTIVE)
+  stateReason String?
+
+  discoveredVia  DiscoverySource @default(GITHUB_SEARCH)
+  discoveryQuery String?
+  /// Deterministic 0..100 score from the discovery scoring function.
+  discoveryScore Float           @default(0)
+
+  /// Cached repository analysis. Invalidated by headSha drift, not by time.
+  analysisJson    Json?
+  analysisHeadSha String?
+  analysisAt      DateTime? @db.Timestamptz(3)
+  analysisCostUsd Decimal   @default(0) @db.Decimal(12, 6)
+
+  /// Contribution conventions worth remembering for later stages.
+  lessons Lesson[]
+
+  firstSeenAt    DateTime  @default(now()) @db.Timestamptz(3)
+  lastSyncedAt   DateTime  @default(now()) @db.Timestamptz(3)
+  lastAnalyzedAt DateTime? @db.Timestamptz(3)
+
+  snapshots     ProjectSnapshot[]
+  signals       ProjectSignal[]
+  candidates    Candidate[]
+  contributions Contribution[]
+  digests       RepoDigest[]
+  tasks         Task[]
+
+  @@index([state, repoPushedAt])
+  @@index([discoveryScore])
+}
+
+/// Point-in-time counters. Growth is computed by comparing snapshots, never
+/// from a single reading.
+model ProjectSnapshot {
+  id        String  @id @default(cuid())
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  stars               Int
+  forks               Int
+  watchers            Int
+  openIssues          Int
+  openPrs             Int      @default(0)
+  commitsLast30d      Int      @default(0)
+  releasesLast90d     Int      @default(0)
+  contributorsLast30d Int      @default(0)
+  capturedAt          DateTime @default(now()) @db.Timestamptz(3)
+
+  @@unique([projectId, capturedAt])
+  @@index([projectId, capturedAt])
+}
+
+enum SignalKind {
+  STAR_GROWTH_7D
+  STAR_GROWTH_30D
+  FORK_GROWTH_30D
+  ISSUE_ACTIVITY_30D
+  PR_ACTIVITY_30D
+  COMMIT_ACTIVITY_30D
+  CONTRIBUTOR_GROWTH_30D
+  RELEASE_RECENCY
+  RESPONSIVENESS
+  TEST_COVERAGE_SIGNAL
+  /// Heuristic: growth that looks coordinated or artificial.
+  SUSPICIOUS_ACTIVITY
+  /// Heuristic: mature, well-maintained project with open bugs.
+  MAINTENANCE_GAP
+}
+
+/// A derived, explainable observation about a project. Signals are recomputed
+/// deterministically; the raw values that produced them are kept in evidence.
+model ProjectSignal {
+  id        String  @id @default(cuid())
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  kind       SignalKind
+  value      Float
+  /// Human-readable explanation, no model involved.
+  detail     String
+  evidence   Json
+  computedAt DateTime   @default(now()) @db.Timestamptz(3)
+
+  @@unique([projectId, kind, computedAt])
+  @@index([kind, value])
+}
+
+// ---------------------------------------------------------------------------
+// Repository digests
+//
+// The digest is the deterministic, size-bounded view of a repository that
+// every agent reads instead of cloning it: README, conventions, manifests,
+// test layout, and a file inventory. Cached per commit SHA.
+// ---------------------------------------------------------------------------
+
+model RepoDigest {
+  id        String  @id @default(cuid())
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  headSha   String
+  json      Json
+  /// Size of the serialized digest, used to keep prompts bounded.
+  bytes     Int
+  fileCount Int
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@unique([projectId, headSha])
+}
+
+// ---------------------------------------------------------------------------
+// Candidate issues
+//
+// A candidate is a hypothesis with evidence, not a confirmed problem. It can
+// originate from an existing GitHub issue or from independent code inspection.
+// ---------------------------------------------------------------------------
+
+enum CandidateStatus {
+  /// Created, waiting for investigation.
+  PROPOSED
+  INVESTIGATING
+  /// Passed evidence-based validation and is suitable to implement.
+  VALIDATED
+  /// Real, but needs more evidence before implementation.
+  NEEDS_INVESTIGATION
+  /// Requires a maintainer decision before any code is written.
+  NEEDS_MAINTAINER_INPUT
+  /// Equivalent work already exists.
+  DUPLICATE
+  /// Not a genuine problem.
+  REJECTED
+  /// Validated but unsuitable (scope, risk, policy).
+  OUT_OF_SCOPE
+  /// Promoted to a contribution.
+  PROMOTED
+  /// Investigation abandoned (budget, errors, manual stop).
+  ABANDONED
+}
+
+enum CandidateOrigin {
+  /// Derived from an existing reported issue.
+  EXISTING_ISSUE
+  /// Found by inspecting the code independently.
+  CODE_INSPECTION
+  /// Found by comparing documented behavior with implementation.
+  DOC_INCONSISTENCY
+  /// Found from test gaps around risky code paths.
+  TEST_GAP
+}
+
+model Candidate {
+  id        String  @id @default(cuid())
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  title             String
+  summary           String
+  origin            CandidateOrigin
+  /// Set when the hypothesis comes from an existing GitHub issue.
+  originIssueNumber Int?
+  originIssueUrl    String?
+
+  /// Files the hypothesis is about.
+  files           String[] @default([])
+  /// Deterministic fingerprint used for deduplication across discovery cycles.
+  fingerprint     String
+  severity        String   @default("unknown")
+  /// Commit the hypothesis was generated at. Evidence is read at this commit,
+  /// so investigation does not silently drift when the project merges new work.
+  analysisHeadSha String?
+
+  status       CandidateStatus @default(PROPOSED)
+  statusReason String?
+
+  /// Cost spent investigating this candidate, for per-candidate budgeting.
+  costUsd   Decimal @default(0) @db.Decimal(12, 6)
+  llmTokens Int     @default(0)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  investigations Investigation[]
+  decision       Decision?
+  contributions  Contribution[]
+
+  @@unique([projectId, fingerprint])
+  @@index([status, createdAt])
+}
+
+enum InvestigationKind {
+  PROJECT_ANALYSIS
+  HYPOTHESIS
+  VALIDATION
+  REPRODUCTION
+  DUPLICATE_SEARCH
+  MAINTAINER_CONTEXT
+  DECISION_ADJUDICATION
+  SOLUTION_PLAN
+  SOLUTION_EDIT
+  REVIEW_CORRECTNESS
+  REVIEW_SECURITY
+  REVIEW_MAINTAINABILITY
+  REVIEW_ADVERSARIAL
+  REVIEW_AGGREGATION
+  FEEDBACK_TRIAGE
+  PR_NARRATIVE
+}
+
+enum InvestigationVerdict {
+  /// Evidence supports the hypothesis / review approved the change.
+  SUPPORTS
+  /// Evidence contradicts the hypothesis / review found blocking defects.
+  CONTRADICTS
+  /// Evidence is insufficient or ambiguous.
+  INCONCLUSIVE
+  NOT_APPLICABLE
+}
+
+/// One agent execution with structured input/output. Investigation rows are
+/// the durable record of what each specialist agent concluded and why.
+model Investigation {
+  id          String     @id @default(cuid())
+  candidateId String?
+  candidate   Candidate? @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+
+  contributionId String?
+  contribution   Contribution? @relation(fields: [contributionId], references: [id], onDelete: Cascade)
+
+  kind             InvestigationKind
+  agent            String
+  model            String?
+  /// sha256 of the canonicalized input bundle. Same hash => cached/reused output.
+  inputHash        String
+  verdict          InvestigationVerdict
+  confidence       Float
+  /// Structured findings: evidence, contradictions, results, risks, next action.
+  outputJson       Json
+  /// Free-form one-line explanation shown in the dashboard.
+  rationale        String
+  promptTokens     Int                  @default(0)
+  completionTokens Int                  @default(0)
+  costUsd          Decimal              @default(0) @db.Decimal(12, 6)
+  cacheHit         Boolean              @default(false)
+  durationMs       Int                  @default(0)
+  createdAt        DateTime             @default(now()) @db.Timestamptz(3)
+
+  @@unique([kind, inputHash])
+  @@index([candidateId, kind])
+  @@index([contributionId, kind])
+}
+
+enum DecisionOutcome {
+  IMPLEMENT
+  NEEDS_INVESTIGATION
+  NEEDS_MAINTAINER_INPUT
+  DUPLICATE
+  NOT_A_PROBLEM
+  TOO_RISKY
+  OUT_OF_SCOPE
+}
+
+/// The orchestrator's explicit decision after aggregating agent evidence.
+/// Written once per candidate; revisions create a new row is not allowed —
+/// the decision is updated with a new policyVersion and recorded in events.
+model Decision {
+  id          String    @id @default(cuid())
+  candidateId String    @unique
+  candidate   Candidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+
+  outcome       DecisionOutcome
+  rationale     String
+  /// Which evidence drove the decision (agent outputs, reproduction results).
+  evidenceJson  Json
+  /// True when agreement was not reached and a human must decide.
+  escalated     Boolean         @default(false)
+  policyVersion String
+  decidedBy     String          @default("orchestrator")
+  createdAt     DateTime        @default(now()) @db.Timestamptz(3)
+
+  @@index([outcome, createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// Contributions
+//
+// The long-running unit of work: one validated candidate, from implementation
+// through review, submission, and maintainer feedback. Its `state` column is
+// the workflow state machine's durable position.
+// ---------------------------------------------------------------------------
+
+enum ContributionState {
+  APPROVED_FOR_IMPLEMENTATION
+  IMPLEMENTING
+  TESTING
+  INDEPENDENT_REVIEW
+  REVISION_REQUIRED
+  READY_FOR_SUBMISSION
+  HUMAN_APPROVAL
+  PR_SUBMITTED
+  AWAITING_REVIEW
+  FEEDBACK_RECEIVED
+  RESOLVED
+  // Terminal / exceptional states
+  REJECTED_CANDIDATE
+  DUPLICATE
+  NEEDS_MAINTAINER_INPUT
+  FAILED
+  RETRYABLE_ERROR
+  RATE_LIMITED
+  CANCELLED
+  ABANDONED
+  MERGE_CONFLICT
+  CLOSED_UNMERGED
+  MERGED
+}
+
+model Contribution {
+  id          String    @id @default(cuid())
+  projectId   String
+  project     Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  candidateId String
+  candidate   Candidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+
+  state       ContributionState @default(APPROVED_FOR_IMPLEMENTATION)
+  /// Why the workflow is in this state. Updated on every transition.
+  stateReason String?
+
+  /// Idempotency key: one contribution per candidate unless reopened.
+  idempotencyKey String @unique
+
+  workspacePath String?
+  sandboxKind   String   @default("none")
+  branchName    String?
+  baseRef       String?
+  baseSha       String?
+  headSha       String?
+  /// sha256 of the canonicalized diff of the latest revision.
+  diffHash      String?
+  diffStat      String?
+  filesChanged  String[] @default([])
+
+  planJson      Json?
+  /// Prepared, human-approved submission artifact: narrative, rendered body,
+  /// expected hashes, fork owner. Publishing reads this instead of regenerating
+  /// text, so the body a human approved is exactly the body that is published.
+  submissionJson Json?
+  revisionCount Int   @default(0)
+  reviewRound   Int   @default(0)
+
+  budgetUsd Decimal @default(0) @db.Decimal(12, 6)
+  costUsd   Decimal @default(0) @db.Decimal(12, 6)
+  llmTokens Int     @default(0)
+
+  /// Operator-facing note set by failure handling ("why did this stop?").
+  blockedReason String?
+
+  createdAt   DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime  @updatedAt @db.Timestamptz(3)
+  submittedAt DateTime? @db.Timestamptz(3)
+  resolvedAt  DateTime? @db.Timestamptz(3)
+
+  revisions      Revision[]
+  reviews        Review[]
+  testRuns       TestRun[]
+  investigations Investigation[]
+  pullRequests   PullRequest[]
+  approvals      Approval[]
+  events         WorkflowEvent[]
+  tasks          Task[]
+
+  @@index([state, updatedAt])
+}
+
+/// One implementation attempt. Revisions are append-only: the diff of record
+/// is always recomputable from the workspace, and the review trail stays intact.
+model Revision {
+  id             String       @id @default(cuid())
+  contributionId String
+  contribution   Contribution @relation(fields: [contributionId], references: [id], onDelete: Cascade)
+
+  index        Int
+  summary      String
+  rootCause    String?
+  filesChanged String[] @default([])
+  testsAdded   String[] @default([])
+  diffHash     String
+  diff         String
+  /// Unresolved uncertainties the solution agent recorded.
+  uncertainty  Json
+  /// Reviewer findings this revision was written to address.
+  addresses    Json
+  costUsd      Decimal  @default(0) @db.Decimal(12, 6)
+  createdAt    DateTime @default(now()) @db.Timestamptz(3)
+
+  @@unique([contributionId, index])
+}
+
+enum Reviewer {
+  CORRECTNESS
+  SECURITY
+  MAINTAINABILITY
+  ADVERSARIAL
+}
+
+enum ReviewVerdict {
+  APPROVE
+  APPROVE_WITH_NOTES
+  REQUEST_CHANGES
+  BLOCK
+}
+
+enum FindingSeverity {
+  INFO
+  MINOR
+  MAJOR
+  CRITICAL
+}
+
+enum FindingKind {
+  ACTUAL_DEFECT
+  REGRESSION_RISK
+  TEST_GAP
+  SECURITY
+  RELIABILITY
+  CONVENTION
+  SCOPE
+  STYLE_PREFERENCE
+  UNCERTAINTY
+}
+
+/// A reviewer's structured findings on one revision. Findings are typed so
+/// preferences can be separated from defects without a model deciding later.
+model Review {
+  id             String       @id @default(cuid())
+  contributionId String
+  contribution   Contribution @relation(fields: [contributionId], references: [id], onDelete: Cascade)
+
+  revisionIndex Int
+  round         Int
+  reviewer      Reviewer
+  verdict       ReviewVerdict
+  findingsJson  Json
+  blockingCount Int           @default(0)
+  model         String?
+  costUsd       Decimal       @default(0) @db.Decimal(12, 6)
+  inputHash     String
+  createdAt     DateTime      @default(now()) @db.Timestamptz(3)
+
+  @@unique([contributionId, revisionIndex, reviewer, round])
+  @@index([contributionId, round])
+}
+
+enum TestStatus {
+  PASSED
+  FAILED
+  ERROR
+  TIMEOUT
+  SKIPPED
+}
+
+model TestRun {
+  id             String       @id @default(cuid())
+  contributionId String
+  contribution   Contribution @relation(fields: [contributionId], references: [id], onDelete: Cascade)
+
+  revisionIndex Int
+  command       String
+  status        TestStatus
+  exitCode      Int?
+  durationMs    Int
+  sandboxKind   String
+  /// Tail of combined output, truncated for storage.
+  outputTail    String
+  outputBytes   Int        @default(0)
+  truncated     Boolean    @default(false)
+  /// True for the project's own suite vs. a targeted reproduction of the issue.
+  kind          String     @default("project_suite")
+  createdAt     DateTime   @default(now()) @db.Timestamptz(3)
+
+  @@index([contributionId, revisionIndex])
+}
+
+// ---------------------------------------------------------------------------
+// Pull requests and maintainer feedback
+// ---------------------------------------------------------------------------
+
+enum PrState {
+  DRAFT
+  OPEN
+  MERGED
+  CLOSED
+}
+
+model PullRequest {
+  id             String       @id @default(cuid())
+  contributionId String
+  contribution   Contribution @relation(fields: [contributionId], references: [id], onDelete: Cascade)
+
+  number            Int
+  url               String
+  nodeId            String?
+  repoFullName      String
+  headRef           String
+  headRepo          String
+  baseRef           String
+  state             PrState   @default(OPEN)
+  isDraft           Boolean   @default(false)
+  headSha           String
+  mergeable         Boolean?
+  mergeableState    String?
+  reviewDecision    String?
+  bodyHash          String
+  titleUsed         String
+  commitMessageUsed String
+  openedAt          DateTime  @db.Timestamptz(3)
+  mergedAt          DateTime? @db.Timestamptz(3)
+  closedAt          DateTime? @db.Timestamptz(3)
+  lastSyncedAt      DateTime  @default(now()) @db.Timestamptz(3)
+  /// Contract: the diff hash that was approved and published. Used to detect
+  /// that a later revision was pushed without a fresh approval.
+  publishedDiffHash String?
+
+  comments PrComment[]
+
+  @@unique([repoFullName, number])
+  @@index([state])
+}
+
+enum CommentKind {
+  ISSUE_COMMENT
+  REVIEW
+  REVIEW_COMMENT
+  MERGE_STATE
+}
+
+enum CommentDisposition {
+  /// Not triaged yet.
+  PENDING
+  /// Requested a concrete change we intend to make.
+  ACTIONABLE
+  /// Question answered or information only.
+  INFORMATIONAL
+  /// Approval or positive acknowledgement.
+  ACKNOWLEDGED
+  /// We intend to reply without changing code.
+  REPLY_ONLY
+  /// Needs human input before acting.
+  ESCALATED
+  /// Judged technically unjustified; no change and no argument.
+  NOT_APPLICABLE
+  /// Triage produced nothing actionable.
+  NO_ACTION
+}
+
+model PrComment {
+  id   String      @id @default(cuid())
+  prId String
+  pr   PullRequest @relation(fields: [prId], references: [id], onDelete: Cascade)
+
+  githubId          BigInt      @unique
+  kind              CommentKind
+  author            String
+  authorAssociation String?
+  body              String
+  path              String?
+  line              Int?
+  url               String?
+  createdAt         DateTime    @db.Timestamptz(3)
+  /// Bumped when the comment body changes (rare, but edits happen).
+  bodyHash          String
+
+  disposition       CommentDisposition @default(PENDING)
+  triageJson        Json?
+  handledAt         DateTime?          @db.Timestamptz(3)
+  handledByRevision Int?
+  replyBody         String?
+  replyPublishedAt  DateTime?          @db.Timestamptz(3)
+  replyCommentId    BigInt?
+
+  @@index([prId, disposition])
+}
+
+// ---------------------------------------------------------------------------
+// Workflow events, tasks, and LLM accounting
+// ---------------------------------------------------------------------------
+
+enum ActorKind {
+  SYSTEM
+  AGENT
+  HUMAN
+  /// A person running an operational CLI (rebuild-digest, approve, ...).
+  OPERATOR
+}
+
+/// Append-only audit log. Every state transition, decision, approval, publish,
+/// and security-relevant event lands here with a reason and evidence.
+model WorkflowEvent {
+  id String @id @default(cuid())
+
+  projectId      String?
+  candidateId    String?
+  contributionId String?
+  contribution   Contribution? @relation(fields: [contributionId], references: [id], onDelete: Cascade)
+  taskId         String?
+
+  eventType        String
+  fromState        String?
+  toState          String?
+  actorKind        ActorKind @default(SYSTEM)
+  actor            String    @default("orchestrator")
+  reason           String
+  evidence         Json?
+  /// Security-relevant events are flagged so they can be surfaced separately.
+  securityRelevant Boolean   @default(false)
+  createdAt        DateTime  @default(now()) @db.Timestamptz(3)
+
+  @@index([contributionId, createdAt])
+  @@index([eventType, createdAt])
+  @@index([securityRelevant, createdAt])
+}
+
+enum TaskStatus {
+  PENDING
+  RUNNING
+  SUCCEEDED
+  FAILED
+  /// Retries exhausted. Requires operator attention.
+  DEAD
+  CANCELLED
+}
+
+enum TaskKind {
+  DISCOVER_PROJECTS
+  SYNC_PROJECT
+  ANALYZE_PROJECT
+  GENERATE_HYPOTHESES
+  INVESTIGATE_CANDIDATE
+  IMPLEMENT_CONTRIBUTION
+  RUN_TESTS
+  REVIEW_CONTRIBUTION
+  PREPARE_SUBMISSION
+  PUBLISH_CONTRIBUTION
+  SYNC_PULL_REQUEST
+  HANDLE_FEEDBACK
+  MAINTAIN_CONTRIBUTIONS
+  ROLLUP_METRICS
+}
+
+/// Durable job queue. Claiming uses `FOR UPDATE SKIP LOCKED`, so multiple
+/// workers can run without an extra broker. `dedupeKey` makes enqueueing
+/// idempotent and prevents duplicate branches/PRs on retry.
+model Task {
+  id     String     @id @default(cuid())
+  kind   TaskKind
+  status TaskStatus @default(PENDING)
+
+  dedupeKey String @unique
+  payload   Json
+
+  priority    Int       @default(100)
+  attempts    Int       @default(0)
+  maxAttempts Int       @default(3)
+  availableAt DateTime  @default(now()) @db.Timestamptz(3)
+  leaseUntil  DateTime? @db.Timestamptz(3)
+  lockedBy    String?
+  lastError   String?
+
+  projectId      String?
+  project        Project?      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  contributionId String?
+  contribution   Contribution? @relation(fields: [contributionId], references: [id], onDelete: Cascade)
+
+  createdAt  DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt  DateTime  @updatedAt @db.Timestamptz(3)
+  finishedAt DateTime? @db.Timestamptz(3)
+
+  @@index([status, availableAt, priority])
+  @@index([kind, status])
+}
+
+/// Every model call, cached or not. This is the cost source of truth.
+model LlmCall {
+  id                 String   @id @default(cuid())
+  agent              String
+  model              String
+  taskRef            String?
+  /// sha256 of canonicalized request. Matches LlmCache.key.
+  inputHash          String
+  cacheHit           Boolean  @default(false)
+  ok                 Boolean  @default(true)
+  error              String?
+  promptTokens       Int      @default(0)
+  completionTokens   Int      @default(0)
+  reasoningTokens    Int      @default(0)
+  cachedPromptTokens Int      @default(0)
+  costUsd            Decimal  @default(0) @db.Decimal(12, 6)
+  latencyMs          Int      @default(0)
+  createdAt          DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([agent, createdAt])
+  @@index([createdAt])
+}
+
+/// Content-addressed response cache. Identical prompts with identical
+/// parameters are answered from the database instead of the API.
+model LlmCache {
+  key       String   @id
+  model     String
+  response  Json
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  expiresAt DateTime @db.Timestamptz(3)
+
+  @@index([expiresAt])
+}
+
+enum BudgetScope {
+  GLOBAL
+  PROJECT
+  CANDIDATE
+  CONTRIBUTION
+}
+
+/// Rolling spend counters used by the budget guard. `periodKey` is a bounded
+/// window label ("2026-10-18" or "2026-10").
+model BudgetPeriod {
+  id        String      @id @default(cuid())
+  scope     BudgetScope
+  /// Empty string for scope GLOBAL so the unique constraint still applies.
+  scopeRef  String      @default("")
+  periodKey String
+  limitUsd  Decimal     @db.Decimal(12, 6)
+  spentUsd  Decimal     @default(0) @db.Decimal(12, 6)
+  calls     Int         @default(0)
+  updatedAt DateTime    @updatedAt @db.Timestamptz(3)
+
+  @@unique([scope, scopeRef, periodKey])
+}
+
+enum ApprovalAction {
+  PUBLISH_BRANCH
+  OPEN_PULL_REQUEST
+  PUSH_REVISION
+  POST_COMMENT
+}
+
+enum ApprovalStatus {
+  PENDING
+  GRANTED
+  DENIED
+  EXPIRED
+  CONSUMED
+  REVOKED
+}
+
+/// Human gate for externally visible actions. An approval is bound to the
+/// exact artifact hash it authorized, so any later change invalidates it.
+model Approval {
+  id             String       @id @default(cuid())
+  contributionId String
+  contribution   Contribution @relation(fields: [contributionId], references: [id], onDelete: Cascade)
+
+  action       ApprovalAction
+  status       ApprovalStatus @default(PENDING)
+  artifactHash String
+  requestedBy  String         @default("orchestrator")
+  requestedAt  DateTime       @default(now()) @db.Timestamptz(3)
+  decidedBy    String?
+  decidedAt    DateTime?      @db.Timestamptz(3)
+  note         String?
+  consumedAt   DateTime?      @db.Timestamptz(3)
+  expiresAt    DateTime?      @db.Timestamptz(3)
+
+  @@unique([contributionId, action, artifactHash])
+  @@index([status])
+}
+
+/// Project-specific knowledge learned from real outcomes: review conventions,
+/// maintainer preferences, rejected approaches. Fed back into later runs.
+model Lesson {
+  id        String  @id @default(cuid())
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  kind       String
+  text       String
+  evidence   Json
+  source     String   @default("agent")
+  confidence Float    @default(0.5)
+  createdAt  DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([projectId, kind])
+}
+
+/// Daily rollups for the evaluation dashboard. Computed deterministically.
+model MetricDaily {
+  id        String   @id @default(cuid())
+  date      DateTime @db.Date
+  key       String
+  value     Float
+  meta      Json?
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@unique([date, key])
+}
+
+model Setting {
+  key       String   @id
+  valueJson Json
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+}

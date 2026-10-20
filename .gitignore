@@ -1,0 +1,13 @@
+node_modules/
+.next/
+.env
+.env.local
+src/generated/
+*.tsbuildinfo
+next-env.d.ts
+# Isolated per-contribution workspaces (cloned repositories live here)
+.workspaces/
+# Sandbox scratch and logs
+.tmp/
+*.log
+coverage/
