@@ -41,7 +41,9 @@
     "status": "tsx scripts/status.ts",
     "approve": "tsx scripts/approve.ts",
     "budget": "tsx scripts/budget.ts",
-    "doctor": "tsx scripts/doctor.ts"
+    "doctor": "tsx scripts/doctor.ts",
+    "shortlist": "tsx scripts/shortlist.ts",
+    "pipeline": "tsx scripts/pipeline.ts"
   },
   "dependencies": {
     "@prisma/adapter-pg": "7.10.0",

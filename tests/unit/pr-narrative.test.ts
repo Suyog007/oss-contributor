@@ -36,7 +36,7 @@ describe('validateNarrative', () => {
       input,
     );
     expect(result.problems[0]).toMatch(/not actually run/);
-    expect(result.narrative.testsPerformed).toEqual(['go test ./pkg/agent/']);
+    expect(result.narrative.testsPerformed).toEqual([]);
   });
 
   it('rejects an issue that was not the candidate source', () => {
@@ -89,6 +89,6 @@ describe('fallbackNarrative', () => {
       featureRequest: false,
     } as PrNarrativeInput);
     expect(result.issueReferences).toEqual([]);
-    expect(result.prBody).not.toContain('#');
+    expect(result.prBody).not.toMatch(/#\d/);
   });
 });

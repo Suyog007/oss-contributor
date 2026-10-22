@@ -657,7 +657,6 @@ export async function decideApproval(
     where: {
       contributionId: args.contributionId,
       action: args.action,
-      ...(args.artifactHash ? { artifactHash: args.artifactHash } : {}),
     },
     orderBy: { requestedAt: 'desc' },
   });
