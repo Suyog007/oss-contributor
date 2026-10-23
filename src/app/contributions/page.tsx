@@ -1,9 +1,11 @@
+import { requireAuth } from '@/dashboard/auth';
 import { Page, Pill, Table, ago } from '@/dashboard/ui';
 import { listContributions } from '@/dashboard/queries';
 
 export const dynamic = 'force-dynamic';
 
 export default async function Contributions() {
+  await requireAuth();
   const rows = await listContributions();
   return (
     <Page

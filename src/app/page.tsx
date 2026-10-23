@@ -1,3 +1,4 @@
+import { requireAuth } from '@/dashboard/auth';
 import { Page, Pill, Stat } from '@/dashboard/ui';
 import { overview } from '@/dashboard/queries';
 
@@ -22,6 +23,7 @@ function Group({ title, rows, name }: { title: string; name: string; rows: Array
 }
 
 export default async function Home() {
+  await requireAuth();
   const data = await overview();
   const idle = data.projects === 0;
   return (

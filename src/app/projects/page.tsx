@@ -1,9 +1,11 @@
+import { requireAuth } from '@/dashboard/auth';
 import { Page, Pill, Table, ago } from '@/dashboard/ui';
 import { listProjects } from '@/dashboard/queries';
 
 export const dynamic = 'force-dynamic';
 
 export default async function Projects() {
+  await requireAuth();
   const projects = await listProjects();
   return (
     <Page title="Projects" subtitle="Role 1: repositories found by discovery, ranked by the deterministic score.">

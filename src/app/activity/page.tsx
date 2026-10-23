@@ -1,9 +1,11 @@
+import { requireAuth } from '@/dashboard/auth';
 import { Page, Table, ago } from '@/dashboard/ui';
 import { activity } from '@/dashboard/queries';
 
 export const dynamic = 'force-dynamic';
 
 export default async function Activity() {
+  await requireAuth();
   const { events, failing } = await activity();
   return (
     <Page title="Activity" subtitle="Audit log of everything the agents did, and why.">

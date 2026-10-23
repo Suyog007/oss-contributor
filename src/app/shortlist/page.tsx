@@ -1,9 +1,11 @@
+import { requireAuth } from '@/dashboard/auth';
 import { Page, Table } from '@/dashboard/ui';
 import { shortlist } from '@/dashboard/queries';
 
 export const dynamic = 'force-dynamic';
 
 export default async function Shortlist() {
+  await requireAuth();
   const entries = await shortlist();
   return (
     <Page
