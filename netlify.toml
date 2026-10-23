@@ -1,6 +1,13 @@
 [build]
-  # Applies pending Prisma migrations to the database in DATABASE_URL, then builds.
-  command = "pnpm prisma migrate deploy && pnpm build"
+  # Applies pending Prisma migrations, builds the dashboard, then bundles the
+  # worker functions that run the pipeline on a schedule.
+  command = "pnpm prisma migrate deploy && pnpm build && pnpm bundle:functions"
 
 [build.environment]
   NODE_VERSION = "22"
+  # Netlify has no Docker, so command execution is off. Verification then relies
+  # on the validator, duplicate and maintainer checks instead of a sandbox repro.
+  SANDBOX_MODE = "none"
+
+[functions]
+  directory = "netlify/functions"
