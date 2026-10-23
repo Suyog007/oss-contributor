@@ -2,6 +2,9 @@ import { spawn } from 'node:child_process';
 import { tailBytes } from './canonical';
 import { redact } from './logger';
 
+/** Plain env map; NodeJS.ProcessEnv would require NODE_ENV once Next's types are loaded. */
+export type EnvVars = Record<string, string | undefined>;
+
 export interface ProcessResult {
   command: string;
   exitCode: number | null;
@@ -16,7 +19,7 @@ export interface ProcessResult {
 
 export interface RunProcessOptions {
   cwd?: string;
-  env?: NodeJS.ProcessEnv;
+  env?: EnvVars;
   timeoutMs?: number;
   /** Maximum bytes of combined output kept in memory. */
   maxOutputBytes?: number;
@@ -44,7 +47,7 @@ export async function runProcess(
   return new Promise<ProcessResult>((resolve, reject) => {
     const child = spawn(command, args, {
       cwd: options.cwd,
-      env: options.env ?? process.env,
+      env: (options.env ?? process.env) as NodeJS.ProcessEnv,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
 

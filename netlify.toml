@@ -1,0 +1,6 @@
+[build]
+  # Applies pending Prisma migrations to the database in DATABASE_URL, then builds.
+  command = "pnpm prisma migrate deploy && pnpm build"
+
+[build.environment]
+  NODE_VERSION = "22"

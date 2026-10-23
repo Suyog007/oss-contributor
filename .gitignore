@@ -11,3 +11,6 @@ next-env.d.ts
 .tmp/
 *.log
 coverage/
+
+# Netlify local link state
+.netlify

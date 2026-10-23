@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os';
 import type { Db } from '@/db/client';
 import { loadEnv, type Env } from '@/config/env';
 import { createLogger } from '@/lib/logger';
-import { runProcess } from '@/lib/process';
+import { runProcess, type EnvVars } from '@/lib/process';
 import { sha256, slugify } from '@/lib/canonical';
 import { recordSecurityEvent } from '@/workflow/events';
 
@@ -95,7 +95,7 @@ export class Workspace {
     return this.env.GITHUB_FORK_OWNER ?? '';
   }
 
-  private gitEnv(extraEnv: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+  private gitEnv(extraEnv: EnvVars = {}): EnvVars {
     return {
       ...process.env,
       GIT_TERMINAL_PROMPT: '0',
@@ -122,7 +122,7 @@ export class Workspace {
 
   private async git(
     args: string[],
-    options: { timeoutMs?: number; allowFailure?: boolean; env?: NodeJS.ProcessEnv } = {},
+    options: { timeoutMs?: number; allowFailure?: boolean; env?: EnvVars } = {},
   ): Promise<{ code: number | null; stdout: string; output: string }> {
     const result = await runProcess('git', [...this.identityArgs(), ...args], {
       cwd: this.path,
