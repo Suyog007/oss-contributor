@@ -132,3 +132,20 @@ export async function manuallyAdded() {
     })
     .filter((row): row is NonNullable<typeof row> => row !== null);
 }
+
+/** Everything known about one project: stage progress, tasks, candidates and its audit log. */
+export async function projectDetail(fullName: string) {
+  const db = getDb();
+  const project = await db.project.findUnique({ where: { fullName } });
+  if (!project) return null;
+  const [tasks, events, candidates] = await Promise.all([
+    db.task.findMany({ where: { projectId: project.id }, orderBy: { createdAt: 'desc' }, take: 30 }),
+    db.workflowEvent.findMany({ where: { projectId: project.id }, orderBy: { createdAt: 'desc' }, take: 80 }),
+    db.candidate.findMany({
+      where: { projectId: project.id },
+      orderBy: { createdAt: 'desc' },
+      include: { decision: { select: { outcome: true, rationale: true, escalated: true } } },
+    }),
+  ]);
+  return { project, tasks, events, candidates };
+}

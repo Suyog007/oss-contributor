@@ -2,6 +2,8 @@ import { redirect } from 'next/navigation';
 import { loadEnv } from '@/config/env';
 import { requireAuth } from '@/dashboard/auth';
 import { manuallyAdded } from '@/dashboard/queries';
+import Link from 'next/link';
+import { AutoRefresh } from '@/dashboard/AutoRefresh';
 import { Page, Pill, Table, ago } from '@/dashboard/ui';
 import { getDb } from '@/db/client';
 import { GitHubClient, GitHubNotFoundError, GitHubRateLimitError } from '@/github/client';
@@ -53,6 +55,7 @@ export default async function AddRepo({
       title="Add a repository"
       subtitle="Give a GitHub repo and it goes through the same steps as discovered ones: analyze, find bugs, verify."
     >
+      <AutoRefresh seconds={15} />
       <form action={submit} className="card" style={{ maxWidth: 560 }}>
         <label htmlFor="repo">Repository</label>
         <input id="repo" name="repo" placeholder="owner/name or https://github.com/owner/name" required autoFocus />
@@ -66,7 +69,7 @@ export default async function AddRepo({
               </span>
             ) : (
               <>
-                Added <strong>{repo}</strong>. Analysis {result === 'started' ? 'has started' : 'is queued and runs within 15 minutes'}.
+                Added <strong>{repo}</strong> (<Link href={`/projects/${repo}`}>follow progress</Link>). Analysis {result === 'started' ? 'has started' : 'is queued and runs within 15 minutes'}.
               </>
             )}
           </p>
@@ -84,9 +87,9 @@ export default async function AddRepo({
         head={['Repository', 'State', 'Analyzed', 'Bug candidates', 'Tasks', 'Added']}
         empty="Nothing added yet."
         rows={added.map((row) => [
-          <a key="n" href={`https://github.com/${row.fullName}`} target="_blank" rel="noreferrer">
+          <Link key="n" href={`/projects/${row.fullName}`}>
             {row.fullName}
-          </a>,
+          </Link>,
           <span key="s">
             <Pill value={row.state} />
             {row.stateReason ? <div className="muted">{row.stateReason}</div> : null}

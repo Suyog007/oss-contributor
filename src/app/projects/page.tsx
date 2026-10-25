@@ -1,4 +1,5 @@
 import { requireAuth } from '@/dashboard/auth';
+import Link from 'next/link';
 import { Page, Pill, Table, ago } from '@/dashboard/ui';
 import { listProjects } from '@/dashboard/queries';
 
@@ -13,9 +14,9 @@ export default async function Projects() {
         head={['Repository', 'Score', 'Stars', 'Language', 'License', 'State', 'Analyzed', 'Last push']}
         empty="No projects yet."
         rows={projects.map((p) => [
-          <a key="n" href={`https://github.com/${p.fullName}`} target="_blank" rel="noreferrer">
+          <Link key="n" href={`/projects/${p.fullName}`}>
             {p.fullName}
-          </a>,
+          </Link>,
           p.discoveryScore.toFixed(1),
           p.stars.toLocaleString(),
           p.language ?? '—',
