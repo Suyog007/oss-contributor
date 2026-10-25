@@ -1,7 +1,7 @@
 import { createDb } from '@/db/client';
 import { loadEnv } from '@/config/env';
 import { enqueue } from '@/workflow/queue';
-import { triggerToken } from './worker-background';
+import { triggerToken } from '@/worker/trigger';
 
 /**
  * Scheduled function (every 15 minutes). It only queues work and pokes the

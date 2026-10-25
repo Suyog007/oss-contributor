@@ -3,6 +3,7 @@ import { logout, requireAuth } from './auth';
 
 const LINKS = [
   ['/', 'Overview'],
+  ['/add', 'Add repo'],
   ['/projects', 'Projects'],
   ['/shortlist', 'Shortlist'],
   ['/candidates', 'Candidates'],

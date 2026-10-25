@@ -210,17 +210,25 @@ export async function runDiscovery(
   return summary;
 }
 
-interface EvaluateOutcome {
+export interface EvaluateOutcome {
   projectId: string;
   state: 'ACTIVE' | 'BLOCKED';
   score: number;
 }
 
-async function evaluateRepository(
+/**
+ * Evaluate one repository and record it as a project.
+ *
+ * `manual` is for repositories a person asked for by name: the popularity,
+ * age and activity floors are skipped (the person chose it), but the hard
+ * safety checks stay (archived, fork, no issues, no license, too large).
+ */
+export async function evaluateRepository(
   db: Db,
   client: GitHubClient,
-  repo: SearchRepoResult & { pack: string; query: string },
+  repo: { fullName: string; pack: string; query: string },
   now: Date,
+  options: { manual?: boolean } = {},
 ): Promise<EvaluateOutcome> {
   const env = loadEnv();
   const ref = splitFullName(repo.fullName);
@@ -241,10 +249,10 @@ async function evaluateRepository(
       defaultBranch: metadata.defaultBranch,
     },
     {
-      minStars: env.DISCOVERY_MIN_STARS,
+      minStars: options.manual ? 0 : env.DISCOVERY_MIN_STARS,
       maxRepoSizeKb: env.DISCOVERY_MAX_REPO_SIZE_KB,
-      maxDaysSincePush: env.DISCOVERY_MAX_DAYS_SINCE_PUSH,
-      minRepoAgeDays: env.DISCOVERY_MIN_REPO_AGE_DAYS,
+      maxDaysSincePush: options.manual ? Number.POSITIVE_INFINITY : env.DISCOVERY_MAX_DAYS_SINCE_PUSH,
+      minRepoAgeDays: options.manual ? 0 : env.DISCOVERY_MIN_REPO_AGE_DAYS,
       requireLicense: env.DISCOVERY_REQUIRE_LICENSE,
       requireTests: false,
     },
@@ -277,7 +285,7 @@ async function evaluateRepository(
       repoPushedAt: metadata.pushedAt,
       state: gates.accepted ? 'ACTIVE' : 'BLOCKED',
       stateReason: gates.accepted ? null : gates.reasons.join('; '),
-      discoveredVia: 'GITHUB_SEARCH',
+      discoveredVia: options.manual ? 'MANUAL' : 'GITHUB_SEARCH',
       discoveryQuery: repo.query,
       discoveryScore: scored.score,
     },

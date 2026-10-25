@@ -10,7 +10,8 @@ opening a PR) waits for a human to approve the exact artifact.
 | Role | What it does | Code | Look at it |
 |---|---|---|---|
 | 1. Discoverer | Searches GitHub, applies hard gates (stars, license, activity, size) and a deterministic score | `src/workflows/discover.ts`, `src/discovery/scoring.ts` | `pnpm discover` |
-| 2. Selector | Analyzes each project once per commit, then ranks which ones deserve budget (maintenance health, small contribution areas, runnable tests) | `src/workflows/analyzeProject.ts`, `src/selection/shortlist.ts` | `pnpm shortlist` |
+| 2. Selector | Analyzes each project once per commit, then ranks which ones deserve budget (maintenance health, small contribution areas, runnable tests) | `src/workflows/analyzeProject.ts`, `src/selection/shortlist.ts` | `pnpm add-repo <owner/name or URL>` | Add one repository by hand and queue it for analysis (also the dashboard's **Add repo** page) |
+| `pnpm shortlist` |
 | 3. Bug finder | Reads issues and code and writes falsifiable bug hypotheses (candidates) | `src/agents/hypothesis.ts`, `src/workflows/generateHypotheses.ts` | `pnpm hypotheses` |
 | 4. Verifier | A skeptical validator tries to disprove each candidate, a sandbox reproduction runs it, duplicates and maintainer context are checked, and rules produce a decision | `src/agents/validator.ts`, `reproduction.ts`, `duplicate.ts`, `decision.ts` | `pnpm investigate`, `pnpm pipeline --verified` |
 
@@ -45,6 +46,7 @@ $60/month AI budget, no network inside the sandbox.
 |---|---|
 | `pnpm doctor` | Check env, database, tokens, Docker |
 | `pnpm discover` | Run one discovery cycle |
+| `pnpm add-repo <owner/name or URL>` | Add one repository by hand and queue it for analysis (also the dashboard's **Add repo** page) |
 | `pnpm shortlist` | Ranked projects worth investigating, with reasons |
 | `pnpm pipeline` | Counts per role; `--verified` shows verifier decisions |
 | `pnpm advance` | Queue the next stage for idle work (`--dry-run` to preview) |

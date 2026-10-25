@@ -1,8 +1,9 @@
-import { createHmac, timingSafeEqual } from 'node:crypto';
+import { timingSafeEqual } from 'node:crypto';
 import { githubConfigured, llmConfigured, loadEnv } from '@/config/env';
 import { createDb } from '@/db/client';
 import { GitHubClient } from '@/github/client';
 import { drainQueue } from '@/worker/drain';
+import { triggerToken } from '@/worker/trigger';
 import type { TaskKind } from '@/generated/prisma/enums';
 
 /**
@@ -12,10 +13,6 @@ import type { TaskKind } from '@/generated/prisma/enums';
  *
  * Invoked by the scheduler with a signed header; anyone else gets 401.
  */
-export function triggerToken(secret: string): string {
-  return createHmac('sha256', secret).update('worker-trigger').digest('hex');
-}
-
 const CLAIM_BUDGET_MS = 9 * 60_000;
 const LEASE_MS = 20 * 60_000;
 

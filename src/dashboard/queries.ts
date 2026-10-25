@@ -96,3 +96,39 @@ export async function activity() {
   ]);
   return { events, failing };
 }
+
+/** Repositories a person added by name, with how far each has progressed. */
+export async function manuallyAdded() {
+  const db = getDb();
+  const events = await db.workflowEvent.findMany({
+    where: { eventType: 'project_added_manually', projectId: { not: null } },
+    orderBy: { createdAt: 'desc' },
+    take: 30,
+    select: { projectId: true, createdAt: true },
+  });
+  const ids = [...new Set(events.map((event) => event.projectId!))];
+  if (ids.length === 0) return [];
+  const [projects, candidates, tasks] = await Promise.all([
+    db.project.findMany({ where: { id: { in: ids } } }),
+    db.candidate.groupBy({ by: ['projectId', 'status'], where: { projectId: { in: ids } }, _count: true }),
+    db.task.groupBy({ by: ['projectId', 'status'], where: { projectId: { in: ids } }, _count: true }),
+  ]);
+  const byId = new Map(projects.map((project) => [project.id, project]));
+  return ids
+    .map((id) => {
+      const project = byId.get(id);
+      if (!project) return null;
+      return {
+        id,
+        fullName: project.fullName,
+        state: project.state,
+        stateReason: project.stateReason,
+        analyzed: project.analysisHeadSha !== null,
+        score: project.discoveryScore,
+        candidates: candidates.filter((row) => row.projectId === id),
+        tasks: tasks.filter((row) => row.projectId === id),
+        addedAt: events.find((event) => event.projectId === id)!.createdAt,
+      };
+    })
+    .filter((row): row is NonNullable<typeof row> => row !== null);
+}

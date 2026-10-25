@@ -44,7 +44,8 @@
     "doctor": "tsx scripts/doctor.ts",
     "shortlist": "tsx scripts/shortlist.ts",
     "pipeline": "tsx scripts/pipeline.ts",
-    "bundle:functions": "node scripts/bundle-functions.mjs"
+    "bundle:functions": "node scripts/bundle-functions.mjs",
+    "add-repo": "tsx scripts/add-repo.ts"
   },
   "dependencies": {
     "@prisma/adapter-pg": "7.10.0",
