@@ -1,6 +1,7 @@
 import { createDb } from '@/db/client';
 import { loadEnv } from '@/config/env';
 import { enqueue } from '@/workflow/queue';
+import { recordEvent } from '@/workflow/events';
 import { triggerToken } from '@/worker/trigger';
 
 /**
@@ -56,11 +57,25 @@ export default async (): Promise<Response> => {
 
     const base = process.env['URL'];
     if (!base || !env.SESSION_SECRET) {
+      console.warn(`scheduler: cannot poke worker (URL ${base ? 'set' : 'missing'}, SESSION_SECRET ${env.SESSION_SECRET ? 'set' : 'missing'})`);
+      await recordEvent(db, {
+        eventType: 'scheduler_tick',
+        reason: 'scheduler ran but could not call the worker: URL or SESSION_SECRET is missing',
+        actor: 'netlify-scheduler',
+      });
       return Response.json({ queuedDiscovery: created, triggered: false, reason: 'URL or SESSION_SECRET missing' });
     }
+    const token = triggerToken(env.SESSION_SECRET);
     const response = await fetch(`${base}/.netlify/functions/worker-background`, {
       method: 'POST',
-      headers: { 'x-worker-token': triggerToken(env.SESSION_SECRET) },
+      headers: { 'x-worker-token': token, 'content-type': 'application/json' },
+      body: JSON.stringify({ token }),
+    });
+    console.log(`scheduler: queued discovery=${created}, poked worker at ${base} -> ${response.status}`);
+    await recordEvent(db, {
+      eventType: 'scheduler_tick',
+      reason: `scheduler ran; worker call returned ${response.status}; ${projects.length} project(s) and ${candidates.length} candidate(s) waiting`,
+      actor: 'netlify-scheduler',
     });
     return Response.json({ queuedDiscovery: created, triggered: true, status: response.status });
   } finally {

@@ -11,7 +11,8 @@ export async function pokeWorker(baseUrl: string | undefined, secret: string | u
   try {
     const response = await fetch(`${baseUrl}/.netlify/functions/worker-background`, {
       method: 'POST',
-      headers: { 'x-worker-token': triggerToken(secret) },
+      headers: { 'x-worker-token': triggerToken(secret), 'content-type': 'application/json' },
+      body: JSON.stringify({ token: triggerToken(secret) }),
       signal: AbortSignal.timeout(5_000),
     });
     return response.status === 202 || response.ok;
