@@ -2,6 +2,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { createPrismaClient } from '@/db/client';
 import { GitHubClient } from '@/github/client';
+import { resetEnvCache } from '@/config/env';
 import { addProject } from '@/workflows/addProject';
 
 const url = process.env['TEST_DATABASE_URL'];
@@ -91,5 +92,20 @@ describeDb('addProject', () => {
     created.push(result.projectId);
     expect(result.state).toBe('BLOCKED');
     expect(result.reason).toContain('license');
+  });
+
+  it('lets a repo on LICENSE_EXEMPT_REPOS in without a license, but only when added by hand', async () => {
+    const { client, fullName } = fakeGitHub({ license: null });
+    process.env['LICENSE_EXEMPT_REPOS'] = fullName.toUpperCase();
+    resetEnvCache();
+    try {
+      const result = await addProject(db!, client, fullName, 'test');
+      created.push(result.projectId);
+      expect(result.state).toBe('ACTIVE');
+      expect(result.analysisQueued).toBe(true);
+    } finally {
+      delete process.env['LICENSE_EXEMPT_REPOS'];
+      resetEnvCache();
+    }
   });
 });

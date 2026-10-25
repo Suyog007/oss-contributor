@@ -233,6 +233,9 @@ export async function evaluateRepository(
   const env = loadEnv();
   const ref = splitFullName(repo.fullName);
   const metadata = await fetchRepoMetadata(client, ref);
+  const licenseExempt =
+    options.manual === true &&
+    env.LICENSE_EXEMPT_REPOS.some((entry) => entry.toLowerCase() === metadata.fullName.toLowerCase());
 
   const sample = await collectActivity(client, ref, metadata);
 
@@ -253,7 +256,7 @@ export async function evaluateRepository(
       maxRepoSizeKb: env.DISCOVERY_MAX_REPO_SIZE_KB,
       maxDaysSincePush: options.manual ? Number.POSITIVE_INFINITY : env.DISCOVERY_MAX_DAYS_SINCE_PUSH,
       minRepoAgeDays: options.manual ? 0 : env.DISCOVERY_MIN_REPO_AGE_DAYS,
-      requireLicense: env.DISCOVERY_REQUIRE_LICENSE,
+      requireLicense: env.DISCOVERY_REQUIRE_LICENSE && !licenseExempt,
       requireTests: false,
     },
     { hasTestSuite: null, now },

@@ -97,6 +97,8 @@ const envSchema = z.object({
   DISCOVERY_MAX_REPO_SIZE_KB: int(250_000),
   DISCOVERY_MAX_DAYS_SINCE_PUSH: int(120),
   DISCOVERY_REQUIRE_LICENSE: bool.default(true),
+  // owner/name entries that may be added by hand without a license (testing, your own repos).
+  LICENSE_EXEMPT_REPOS: csv,
   DISCOVERY_REQUIRE_TESTS: bool.default(false),
   /** Repositories younger than this are rejected: early attention is not evidence. */
   DISCOVERY_MIN_REPO_AGE_DAYS: int(14),
