@@ -1,7 +1,8 @@
 [build]
-  # Applies pending Prisma migrations, builds the dashboard, then bundles the
+  # Generates the Prisma client (the install step is skipped when node_modules is
+  # cached), applies pending migrations, builds the dashboard, then bundles the
   # worker functions that run the pipeline on a schedule.
-  command = "pnpm prisma migrate deploy && pnpm build && pnpm bundle:functions"
+  command = "pnpm prisma generate && pnpm prisma migrate deploy && pnpm build && pnpm bundle:functions"
 
 [build.environment]
   NODE_VERSION = "22"
